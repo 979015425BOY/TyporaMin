@@ -206,7 +206,7 @@ export class LocalFileManager implements FileOperations {
       id: document.id,
       title: document.title,
       filePath: document.filePath || document.title, // 在Web环境中，使用title作为路径标识
-      lastOpened: new Date()
+      lastAccessed: new Date()
     }
 
     // 移除已存在的记录

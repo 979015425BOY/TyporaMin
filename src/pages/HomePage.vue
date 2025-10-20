@@ -142,7 +142,7 @@
                       {{ file.title }}
                     </h4>
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {{ formatDate(file.lastOpened) }}
+                      {{ formatDate(file.lastAccessed) }}
                     </p>
                   </div>
                   <el-icon class="text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300">

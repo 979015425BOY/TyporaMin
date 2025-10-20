@@ -24,7 +24,7 @@
               size="small" 
               text 
               :icon="DocumentAdd" 
-              @click="showCreateFileDialog"
+              @click="() => showCreateFileDialog()"
             />
           </el-tooltip>
           <el-tooltip content="新建文件夹" placement="bottom">
@@ -32,7 +32,7 @@
               size="small" 
               text 
               :icon="FolderAdd" 
-              @click="showCreateFolderDialog"
+              @click="() => showCreateFolderDialog()"
             />
           </el-tooltip>
           <el-tooltip content="刷新" placement="bottom">

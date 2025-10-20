@@ -259,7 +259,7 @@ export const useAppStore = defineStore('app', () => {
         const parsed = JSON.parse(savedFiles)
         recentFiles.value = parsed.map((item: any) => ({
           ...item,
-          lastOpened: new Date(item.lastOpened)
+          lastAccessed: new Date(item.lastAccessed || item.lastOpened)
         }))
       }
     } catch (err) {
@@ -283,12 +283,12 @@ export const useAppStore = defineStore('app', () => {
    * 
    * @param file 文件信息
    */
-  const addToRecentFiles = async (file: Omit<FileHistoryItem, 'lastOpened'>) => {
+  const addToRecentFiles = async (file: Omit<FileHistoryItem, 'lastAccessed'>) => {
     const existingIndex = recentFiles.value.findIndex(item => item.filePath === file.filePath)
     
     const fileItem: FileHistoryItem = {
       ...file,
-      lastOpened: new Date()
+      lastAccessed: new Date()
     }
     
     if (existingIndex >= 0) {
