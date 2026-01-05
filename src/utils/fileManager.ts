@@ -3,7 +3,7 @@
  * 提供本地存储、文件上传下载等文件操作功能
  */
 
-import type { Document, FileHistoryItem } from '@/stores/app'
+import type { Document, FileHistoryItem } from '@/types'
 
 /**
  * 本地存储键名常量

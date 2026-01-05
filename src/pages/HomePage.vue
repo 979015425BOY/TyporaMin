@@ -4,7 +4,6 @@
   功能：
   - 显示欢迎界面
   - 提供快速操作入口
-  - 展示最近文件列表
   - 新建文档功能
   
   使用场景：
@@ -96,10 +95,9 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
+      <div class="grid grid-cols-1 gap-8">
         <!-- 工作区管理区域 -->
-        <div class="lg:col-span-2">
+        <div>
           <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
             <!-- 工作区选择器 -->
             <WorkspaceSelector />
@@ -109,48 +107,6 @@
             
             <!-- 文件夹树形展示 -->
             <FolderTree />
-          </div>
-        </div>
-
-        <!-- 最近文件 -->
-        <div class="lg:col-span-1">
-          <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
-              <el-icon class="mr-2">
-                <Clock />
-              </el-icon>
-              最近文件
-            </h3>
-            
-            <div v-if="recentFiles.length === 0" class="text-center py-8">
-              <el-icon :size="48" class="text-gray-400 dark:text-gray-500 mb-4">
-                <Document />
-              </el-icon>
-              <p class="text-gray-500 dark:text-gray-400">暂无最近文件</p>
-            </div>
-            
-            <div v-else class="space-y-3">
-              <div 
-                v-for="file in recentFiles" 
-                :key="file.id"
-                class="group cursor-pointer p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                @click="openRecentFile(file)"
-              >
-                <div class="flex items-center justify-between">
-                  <div class="flex-1 min-w-0">
-                    <h4 class="text-sm font-medium text-gray-900 dark:text-white truncate">
-                      {{ file.title }}
-                    </h4>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {{ formatDate(file.lastAccessed) }}
-                    </p>
-                  </div>
-                  <el-icon class="text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300">
-                    <ArrowRight />
-                  </el-icon>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -164,10 +120,6 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useThemeStore } from '@/stores/theme'
 import { 
-  Clock, 
-  Document, 
-  ArrowRight,
-  Search,
   Moon,
   Sunny,
   Folder,
@@ -183,7 +135,6 @@ import FolderTree from '@/components/FolderTree.vue'
  * 
  * 功能：
  * - 文档创建和打开
- * - 最近文件管理
  * - 页面导航
  */
 
@@ -197,7 +148,6 @@ const dragCounter = ref(0)
 
 // 计算属性
 const isDarkMode = computed(() => appStore.isDarkMode)
-const recentFiles = computed(() => appStore.recentFiles)
 
 // 方法
 const createNewDocument = async () => {
@@ -271,31 +221,6 @@ const openFolder = () => {
 
 const toggleDarkMode = () => {
   appStore.updateSettings({ theme: isDarkMode.value ? 'light' : 'dark' })
-}
-
-const openRecentFile = async (file: any) => {
-  try {
-    await appStore.loadDocument(file.id)
-    router.push({ path: '/editor', query: { id: file.id } })
-  } catch (error) {
-    ElMessage.error('打开文件失败')
-  }
-}
-
-const formatDate = (date: Date) => {
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  
-  if (days === 0) {
-    return '今天'
-  } else if (days === 1) {
-    return '昨天'
-  } else if (days < 7) {
-    return `${days} 天前`
-  } else {
-    return date.toLocaleDateString()
-  }
 }
 
 // 拖拽处理方法

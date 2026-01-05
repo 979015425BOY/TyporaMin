@@ -262,7 +262,7 @@
 import { ref, computed, nextTick } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FileTreeNode } from '@/stores/app'
+import type { FileTreeNode } from '@/types'
 import {
   Folder,
   FolderAdd,

@@ -25,104 +25,21 @@
  * 使用场景：全局状态管理，文档编辑、文件夹导入、工作区管理
  */
 import { defineStore } from 'pinia'
-import { ref, computed, reactive } from 'vue'
+import { ref, computed } from 'vue'
 import { useThemeStore } from './theme'
-
-/**
- * 应用设置接口
- */
-export interface AppSettings {
-  theme: 'light' | 'dark' | 'auto'
-  fontSize: number
-  fontFamily: string
-  lineHeight: number
-  autoSave: boolean
-  autoSaveInterval: number
-  showLineNumbers: boolean
-  wordWrap: boolean
-  tabSize: number
-  language: 'zh-CN' | 'en-US'
-}
-
-// 文档接口
-export interface Document {
-  id: string
-  title: string
-  content: string
-  filePath?: string
-  createdAt: Date
-  updatedAt: Date
-  isDirty: boolean
-  lastModified?: Date
-  isModified?: boolean
-  workspaceId?: string // 关联的工作区ID
-}
-
-/**
- * 工作区接口
- */
-export interface Workspace {
-  id: string
-  name: string
-  path: string // 工作区根路径
-  description?: string
-  createdAt: Date
-  updatedAt: Date
-  isActive: boolean // 是否为当前活跃工作区
-  folderStructure: FileTreeNode[] // 工作区的文件夹结构
-  settings?: Partial<AppSettings> // 工作区特定设置
-}
-
-/**
- * 文件历史记录接口
- */
-export interface FileHistoryItem {
-  id: string
-  title: string
-  filePath: string
-  lastAccessed: Date
-  workspaceId?: string // 关联的工作区ID
-}
-
-/**
- * 文件树节点接口
- */
-export interface FileTreeNode {
-  id: string
-  name: string
-  type: 'file' | 'folder'
-  path: string
-  size?: number
-  lastModified?: Date
-  children?: FileTreeNode[]
-  isExpanded?: boolean
-  parentId?: string
-  workspaceId?: string // 关联的工作区ID
-}
-
-/**
- * 文件夹状态接口
- */
-export interface FolderState {
-  currentPath: string | null
-  treeData: FileTreeNode[]
-  selectedFileId: string | null
-  expandedFolders: Set<string>
-}
+import type {
+  AppSettings,
+  Document,
+  Workspace,
+  FileHistoryItem,
+  FileTreeNode,
+  FolderState
+} from '@/types'
+import { DEFAULT_SETTINGS, STORAGE_KEYS } from '@/constants'
+import { storageService } from '@/services/storage.service'
 
 // 默认设置
-const defaultSettings: AppSettings = {
-  theme: 'auto',
-  fontSize: 14,
-  fontFamily: 'JetBrains Mono, Consolas, Monaco, monospace',
-  lineHeight: 1.6,
-  autoSave: true,
-  autoSaveInterval: 30000, // 30秒
-  showLineNumbers: true,
-  wordWrap: true,
-  tabSize: 2,
-  language: 'zh-CN'
-}
+const defaultSettings: AppSettings = DEFAULT_SETTINGS
 
 export const useAppStore = defineStore('app', () => {
   // 状态
@@ -335,6 +252,66 @@ export const useAppStore = defineStore('app', () => {
     error.value = null
     
     try {
+      // 首先尝试从本地文件系统加载
+      if (currentWorkspace.value) {
+        try {
+          const { getFolderHandle, readFileContent } = await import('@/utils/localFileSystem')
+          const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+          
+          if (folderHandle) {
+            // 查找文件节点
+            const fileNode = findNodeById(id)
+            if (fileNode && fileNode.type === 'file') {
+              // 从本地文件系统读取文件内容
+              const content = await readFileContent(folderHandle, fileNode.path)
+              
+              const document: Document = {
+                id: fileNode.id,
+                title: fileNode.name,
+                content,
+                filePath: fileNode.path,
+                createdAt: fileNode.lastModified || new Date(),
+                updatedAt: new Date(),
+                isDirty: false,
+                lastModified: fileNode.lastModified || new Date(),
+                isModified: false,
+                workspaceId: currentWorkspace.value.id
+              }
+              
+              currentDocument.value = document
+              
+              // 保存当前编辑状态
+              const { STORAGE_KEYS } = await import('@/utils/fileManager')
+              const editingDocument = {
+                id: document.id,
+                title: document.title,
+                filePath: document.filePath,
+                createdAt: document.createdAt,
+                updatedAt: new Date(),
+                isDirty: false,
+                lastModified: document.lastModified || new Date(),
+                isModified: false
+              }
+              
+              localStorage.setItem(STORAGE_KEYS.CURRENT_EDITING_DOCUMENT, JSON.stringify(editingDocument))
+              localStorage.setItem(STORAGE_KEYS.CURRENT_EDITING_CONTENT, document.content || '')
+              
+              await addToRecentFiles({
+                id: document.id,
+                title: document.title,
+                filePath: document.filePath || document.title,
+                workspaceId: currentWorkspace.value.id
+              })
+              
+              return
+            }
+          }
+        } catch (err) {
+          console.warn('从本地文件系统加载失败，尝试从本地存储加载:', err)
+        }
+      }
+      
+      // 如果本地文件系统加载失败，尝试从本地存储加载
       const { fileManager, STORAGE_KEYS } = await import('@/utils/fileManager')
       const document = await fileManager.load(id)
       
@@ -399,13 +376,41 @@ export const useAppStore = defineStore('app', () => {
     error.value = null
     
     try {
+      // 如果当前工作区有本地文件夹句柄，保存到本地文件系统
+      if (currentWorkspace.value && currentDocument.value.filePath) {
+        try {
+          const { getFolderHandle, writeFileContent } = await import('@/utils/localFileSystem')
+          const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+          
+          if (folderHandle) {
+            // 保存到本地文件系统
+            await writeFileContent(folderHandle, currentDocument.value.filePath, currentDocument.value.content)
+            
+            // 更新文件节点的最后修改时间
+            const fileNode = findNodeById(currentDocument.value.id)
+            if (fileNode) {
+              fileNode.lastModified = new Date()
+            }
+            
+            currentDocument.value.lastModified = new Date()
+            currentDocument.value.isModified = false
+            
+            console.log('文档已保存到本地文件系统:', currentDocument.value.filePath)
+            return
+          }
+        } catch (err) {
+          console.warn('保存到本地文件系统失败，尝试保存到本地存储:', err)
+        }
+      }
+      
+      // 如果本地文件系统保存失败，保存到本地存储
       const { fileManager } = await import('@/utils/fileManager')
       await fileManager.save(currentDocument.value)
       
       currentDocument.value.lastModified = new Date()
       currentDocument.value.isModified = false
       
-      console.log('文档已保存:', currentDocument.value)
+      console.log('文档已保存到本地存储:', currentDocument.value)
     } catch (err) {
       error.value = '保存文档失败'
       console.error('保存文档失败:', err)
@@ -927,10 +932,32 @@ export const useAppStore = defineStore('app', () => {
    */
   const refreshFileTree = async (): Promise<void> => {
     try {
-      // 这里可以实现重新加载文件树的逻辑
-      // 目前只是简单的清空展开状态
+      if (!currentWorkspace.value) {
+        throw new Error('没有当前工作区')
+      }
+      
+      // 尝试从本地文件系统重新加载
+      try {
+        const { getFolderHandle, readFolderStructure } = await import('@/utils/localFileSystem')
+        const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+        
+        if (folderHandle) {
+          // 从本地文件系统读取最新的文件夹结构
+          const folderStructure = await readFolderStructure(folderHandle)
+          fileTreeData.value = folderStructure
+          currentWorkspace.value.folderStructure = folderStructure
+          currentWorkspace.value.updatedAt = new Date()
+          await saveWorkspaces()
+          console.log('文件树刷新成功（从本地文件系统）')
+          return
+        }
+      } catch (err) {
+        console.warn('从本地文件系统刷新失败:', err)
+      }
+      
+      // 如果本地文件系统刷新失败，只是清空展开状态
       expandedFolders.value.clear()
-      console.log('文件树刷新成功')
+      console.log('文件树刷新成功（仅清空展开状态）')
     } catch (err) {
       error.value = '刷新文件树失败'
       console.error('刷新文件树失败:', err)
@@ -1051,6 +1078,67 @@ export const useAppStore = defineStore('app', () => {
   }
 
   /**
+   * 从本地文件夹创建新工作区
+   * 
+   * @param description 工作区描述
+   * @returns 工作区对象
+   */
+  const createWorkspaceFromLocalFolder = async (description?: string): Promise<Workspace> => {
+    try {
+      const { selectLocalFolder, saveFolderHandle, readFolderStructure, getFolderName } = await import('@/utils/localFileSystem')
+      
+      // 选择本地文件夹
+      let folderHandle: FileSystemDirectoryHandle
+      try {
+        folderHandle = await selectLocalFolder()
+      } catch (err: any) {
+        // 如果是用户取消，直接抛出，让上层处理
+        if (err.isUserCancel || err.message === '用户取消了文件夹选择') {
+          throw err
+        }
+        // 其他错误也抛出
+        throw err
+      }
+      
+      const folderName = getFolderName(folderHandle)
+      
+      // 读取文件夹结构
+      const folderStructure = await readFolderStructure(folderHandle)
+      
+      // 创建工作区
+      const now = new Date()
+      const newWorkspace: Workspace = {
+        id: `workspace_${Date.now()}_${Math.random()}`,
+        name: folderName,
+        path: folderName,
+        description,
+        createdAt: now,
+        updatedAt: now,
+        isActive: false,
+        folderStructure
+      }
+      
+      // 保存文件夹句柄
+      await saveFolderHandle(newWorkspace.id, folderHandle)
+      
+      workspaces.value.push(newWorkspace)
+      await saveWorkspaces()
+      
+      console.log('从本地文件夹创建工作区成功:', newWorkspace)
+      return newWorkspace
+    } catch (err: any) {
+      // 如果是用户取消，直接抛出，不设置 error.value
+      if (err.isUserCancel || err.message === '用户取消了文件夹选择') {
+        throw err
+      }
+      
+      error.value = '从本地文件夹创建工作区失败'
+      console.error('从本地文件夹创建工作区失败:', err)
+      throw err
+    }
+  }
+
+  /**
    * 切换到指定工作区
    * 
    * @param workspaceId 工作区ID
@@ -1071,8 +1159,28 @@ export const useAppStore = defineStore('app', () => {
       workspace.isActive = true
       currentWorkspace.value = workspace
 
-      // 加载工作区的文件夹结构
-      fileTreeData.value = workspace.folderStructure
+      // 尝试从本地文件系统加载文件夹结构
+      try {
+        const { getFolderHandle, readFolderStructure } = await import('@/utils/localFileSystem')
+        const folderHandle = await getFolderHandle(workspaceId)
+        
+        if (folderHandle) {
+          // 从本地文件系统读取最新的文件夹结构
+          const folderStructure = await readFolderStructure(folderHandle)
+          fileTreeData.value = folderStructure
+          workspace.folderStructure = folderStructure
+          workspace.updatedAt = new Date()
+          await saveWorkspaces()
+        } else {
+          // 如果没有文件夹句柄，使用保存的文件夹结构
+          fileTreeData.value = workspace.folderStructure
+        }
+      } catch (err) {
+        console.warn('从本地文件系统加载失败，使用保存的文件夹结构:', err)
+        // 如果加载失败，使用保存的文件夹结构
+        fileTreeData.value = workspace.folderStructure
+      }
+      
       currentFolderPath.value = workspace.path
 
       // 应用工作区特定设置
@@ -1102,6 +1210,14 @@ export const useAppStore = defineStore('app', () => {
       }
 
       const workspace = workspaces.value[index]
+      
+      // 删除文件夹句柄
+      try {
+        const { deleteFolderHandle } = await import('@/utils/localFileSystem')
+        await deleteFolderHandle(workspaceId)
+      } catch (err) {
+        console.warn('删除文件夹句柄失败:', err)
+      }
       
       // 如果删除的是当前工作区，需要切换到其他工作区或清空
       if (currentWorkspace.value?.id === workspaceId) {
@@ -1255,6 +1371,7 @@ export const useAppStore = defineStore('app', () => {
     
     // 工作区方法
     createWorkspace,
+    createWorkspaceFromLocalFolder,
     switchWorkspace,
     deleteWorkspace,
     updateWorkspace,

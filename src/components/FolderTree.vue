@@ -141,7 +141,7 @@ import { useAppStore } from '@/stores/app'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { FileTreeNode } from '@/stores/app'
+import type { FileTreeNode } from '@/types'
 import FolderTreeNode from './FolderTreeNode.vue'
 import { 
   FolderOpened, 

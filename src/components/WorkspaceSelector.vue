@@ -33,6 +33,15 @@
           新建
         </el-button>
         
+        <el-button 
+          size="small" 
+          type="success" 
+          @click="handleCreateFromLocalFolder"
+          :icon="FolderOpened"
+        >
+          选择本地文件夹
+        </el-button>
+        
         <el-dropdown @command="handleWorkspaceAction" v-if="workspaces.length > 0">
           <el-button size="small" :icon="MoreFilled" circle />
           <template #dropdown>
@@ -193,7 +202,7 @@ import { ref, computed, reactive } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { Workspace } from '@/stores/app'
+import type { Workspace } from '@/types'
 import { 
   Folder, 
   FolderOpened, 
@@ -292,11 +301,22 @@ const switchToWorkspace = async (workspaceId: string) => {
  * 
  * @param command 操作命令
  */
-const handleWorkspaceAction = (command: string) => {
+const handleWorkspaceAction = async (command: string) => {
   switch (command) {
     case 'refresh':
-      appStore.loadWorkspaces()
-      ElMessage.success('工作区列表已刷新')
+      try {
+        // 刷新当前工作区的文件树
+        if (appStore.currentWorkspace) {
+          await appStore.refreshFileTree()
+          ElMessage.success('文件树已刷新')
+        } else {
+          appStore.loadWorkspaces()
+          ElMessage.success('工作区列表已刷新')
+        }
+      } catch (error) {
+        ElMessage.error('刷新失败')
+        console.error('刷新失败:', error)
+      }
       break
     case 'import':
       importFolder()
@@ -372,6 +392,46 @@ const handleCreateWorkspace = async () => {
       ElMessage.error('创建工作区失败')
       console.error('创建工作区失败:', error)
     }
+  } finally {
+    creating.value = false
+  }
+}
+
+/**
+ * 从本地文件夹创建工作区
+ */
+const handleCreateFromLocalFolder = async () => {
+  try {
+    creating.value = true
+    
+    // 检查浏览器是否支持 File System Access API
+    const { isFileSystemAccessSupported } = await import('@/utils/localFileSystem')
+    
+    if (!isFileSystemAccessSupported()) {
+      ElMessage.warning('当前浏览器不支持直接访问本地文件夹，请使用 Chrome 86+ 或 Edge 86+ 浏览器')
+      return
+    }
+    
+    const workspace = await appStore.createWorkspaceFromLocalFolder()
+    
+    // 自动切换到新创建的工作区
+    await appStore.switchWorkspace(workspace.id)
+    
+    ElMessage.success(`工作区"${workspace.name}"创建成功`)
+  } catch (error: any) {
+    // 检查是否是用户取消操作
+    const isUserCancel = error.isUserCancel || error.message === '用户取消了文件夹选择'
+    
+    if (isUserCancel) {
+      // 用户取消，不显示错误，静默处理
+      console.log('用户取消了文件夹选择')
+      return
+    }
+    
+    // 显示错误信息
+    const errorMessage = error.message || '未知错误'
+    ElMessage.error(`从本地文件夹创建工作区失败: ${errorMessage}`)
+    console.error('从本地文件夹创建工作区失败:', error)
   } finally {
     creating.value = false
   }

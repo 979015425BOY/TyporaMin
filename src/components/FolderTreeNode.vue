@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { FileTreeNode } from '@/stores/app'
+import type { FileTreeNode } from '@/types'
 import { 
   ArrowRight,
   Folder,
