@@ -33,10 +33,8 @@ import type {
   Workspace,
   FileHistoryItem,
   FileTreeNode,
-  FolderState
 } from '@/types'
-import { DEFAULT_SETTINGS, STORAGE_KEYS } from '@/constants'
-import { storageService } from '@/services/storage.service'
+import { DEFAULT_SETTINGS } from '@/constants'
 
 // 默认设置
 const defaultSettings: AppSettings = DEFAULT_SETTINGS
@@ -262,6 +260,7 @@ export const useAppStore = defineStore('app', () => {
             // 查找文件节点
             const fileNode = findNodeById(id)
             if (fileNode && fileNode.type === 'file') {
+              // fileNode.path 是相对于工作区根目录的路径
               // 从本地文件系统读取文件内容
               const content = await readFileContent(folderHandle, fileNode.path)
               
@@ -269,7 +268,7 @@ export const useAppStore = defineStore('app', () => {
                 id: fileNode.id,
                 title: fileNode.name,
                 content,
-                filePath: fileNode.path,
+                filePath: fileNode.path, // 相对于工作区根目录的路径
                 createdAt: fileNode.lastModified || new Date(),
                 updatedAt: new Date(),
                 isDirty: false,
@@ -383,7 +382,8 @@ export const useAppStore = defineStore('app', () => {
           const folderHandle = await getFolderHandle(currentWorkspace.value.id)
           
           if (folderHandle) {
-            // 保存到本地文件系统
+            // currentDocument.value.filePath 是相对于工作区根目录的路径
+            // 保存到本地文件系统（直接保存到原文件）
             await writeFileContent(folderHandle, currentDocument.value.filePath, currentDocument.value.content)
             
             // 更新文件节点的最后修改时间
@@ -621,7 +621,7 @@ export const useAppStore = defineStore('app', () => {
   const toggleFolderExpanded = (folderId: string) => {
     const toggleNodeExpanded = (nodes: FileTreeNode[]): boolean => {
       for (const node of nodes) {
-        if (node.id === folderId && node.type === 'folder') {
+        if (node.id === folderId) {
           node.isExpanded = !node.isExpanded
           if (node.isExpanded) {
             expandedFolders.value.add(folderId)
@@ -690,11 +690,31 @@ export const useAppStore = defineStore('app', () => {
    */
   const createFile = async (fileName: string, parentId = ''): Promise<void> => {
     try {
+      // 构建文件路径（相对于工作区根目录）
+      const filePath = parentId ? `${findNodeById(parentId)?.path}/${fileName}` : fileName
+      
+      // 如果当前工作区有本地文件夹句柄，在本地文件系统中创建真实文件
+      if (currentWorkspace.value) {
+        try {
+          const { getFolderHandle, writeFileContent } = await import('@/utils/localFileSystem')
+          const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+          
+          if (folderHandle) {
+            // 在本地文件系统中创建文件（写入空内容）
+            await writeFileContent(folderHandle, filePath, '')
+            console.log('本地文件系统文件创建成功:', filePath)
+          }
+        } catch (err) {
+          console.warn('在本地文件系统创建文件失败，仅创建节点:', err)
+          // 继续创建节点，即使本地文件系统创建失败
+        }
+      }
+      
       const newFile: FileTreeNode = {
         id: `file_${Date.now()}_${Math.random()}`,
         name: fileName,
         type: 'file',
-        path: parentId ? `${findNodeById(parentId)?.path}/${fileName}` : fileName,
+        path: filePath,
         size: 0,
         lastModified: new Date(),
         parentId: parentId || undefined
@@ -741,11 +761,40 @@ export const useAppStore = defineStore('app', () => {
    */
   const createFolder = async (folderName: string, parentId = ''): Promise<void> => {
     try {
+      // 构建文件夹路径（相对于工作区根目录）
+      const folderPath = parentId ? `${findNodeById(parentId)?.path}/${folderName}` : folderName
+      
+      // 如果当前工作区有本地文件夹句柄，在本地文件系统中创建真实文件夹
+      if (currentWorkspace.value) {
+        try {
+          const { getFolderHandle } = await import('@/utils/localFileSystem')
+          const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+          
+          if (folderHandle) {
+            // 在本地文件系统中创建文件夹
+            const pathParts = folderPath.split('/').filter(part => part.length > 0)
+            let currentHandle: FileSystemDirectoryHandle = folderHandle
+            
+            // 导航到父文件夹
+            for (let i = 0; i < pathParts.length - 1; i++) {
+              currentHandle = await currentHandle.getDirectoryHandle(pathParts[i])
+            }
+            
+            // 创建新文件夹
+            await currentHandle.getDirectoryHandle(pathParts[pathParts.length - 1], { create: true })
+            console.log('本地文件系统文件夹创建成功:', folderPath)
+          }
+        } catch (err) {
+          console.warn('在本地文件系统创建文件夹失败，仅创建节点:', err)
+          // 继续创建节点，即使本地文件系统创建失败
+        }
+      }
+      
       const newFolder: FileTreeNode = {
         id: `folder_${Date.now()}_${Math.random()}`,
         name: folderName,
         type: 'folder',
-        path: parentId ? `${findNodeById(parentId)?.path}/${folderName}` : folderName,
+        path: folderPath,
         children: [],
         isExpanded: false,
         parentId: parentId || undefined
@@ -793,19 +842,19 @@ export const useAppStore = defineStore('app', () => {
   const renameFile = async (fileId: string, newName: string): Promise<void> => {
     try {
       const fileNode = findNodeById(fileId)
-      if (fileNode && fileNode.type === 'file') {
-        const oldName = fileNode.name
-        fileNode.name = newName
-        
-        // 更新路径
-        const pathParts = fileNode.path.split('/')
-        pathParts[pathParts.length - 1] = newName
-        fileNode.path = pathParts.join('/')
-        
-        console.log(`文件重命名成功: ${oldName} -> ${newName}`)
-      } else {
+      if (!fileNode) {
         throw new Error('文件不存在')
       }
+      
+      const oldName = fileNode.name
+      fileNode.name = newName
+      
+      // 更新路径
+      const pathParts = fileNode.path.split('/')
+      pathParts[pathParts.length - 1] = newName
+      fileNode.path = pathParts.join('/')
+      
+      console.log(`文件重命名成功: ${oldName} -> ${newName}`)
     } catch (err) {
       error.value = '重命名文件失败'
       console.error('重命名文件失败:', err)
@@ -822,34 +871,34 @@ export const useAppStore = defineStore('app', () => {
   const renameFolder = async (folderId: string, newName: string): Promise<void> => {
     try {
       const folderNode = findNodeById(folderId)
-      if (folderNode && folderNode.type === 'folder') {
-        const oldName = folderNode.name
-        folderNode.name = newName
-        
-        // 更新路径
-        const pathParts = folderNode.path.split('/')
-        pathParts[pathParts.length - 1] = newName
-        const newPath = pathParts.join('/')
-        
-        // 递归更新子节点路径
-        const updateChildrenPaths = (node: FileTreeNode, oldBasePath: string, newBasePath: string) => {
-          if (node.children) {
-            node.children.forEach(child => {
-              child.path = child.path.replace(oldBasePath, newBasePath)
-              if (child.type === 'folder') {
-                updateChildrenPaths(child, oldBasePath, newBasePath)
-              }
-            })
-          }
-        }
-        
-        updateChildrenPaths(folderNode, folderNode.path, newPath)
-        folderNode.path = newPath
-        
-        console.log(`文件夹重命名成功: ${oldName} -> ${newName}`)
-      } else {
+      if (!folderNode) {
         throw new Error('文件夹不存在')
       }
+      
+      const oldName = folderNode.name
+      folderNode.name = newName
+      
+      // 更新路径
+      const pathParts = folderNode.path.split('/')
+      pathParts[pathParts.length - 1] = newName
+      const newPath = pathParts.join('/')
+      
+      // 递归更新子节点路径
+      const updateChildrenPaths = (node: FileTreeNode, oldBasePath: string, newBasePath: string) => {
+        if (node.children) {
+          node.children.forEach(child => {
+            child.path = child.path.replace(oldBasePath, newBasePath)
+            if (child.type === 'folder') {
+              updateChildrenPaths(child, oldBasePath, newBasePath)
+            }
+          })
+        }
+      }
+      
+      updateChildrenPaths(folderNode, folderNode.path, newPath)
+      folderNode.path = newPath
+      
+      console.log(`文件夹重命名成功: ${oldName} -> ${newName}`)
     } catch (err) {
       error.value = '重命名文件夹失败'
       console.error('重命名文件夹失败:', err)
@@ -864,6 +913,30 @@ export const useAppStore = defineStore('app', () => {
    */
   const deleteFile = async (fileId: string): Promise<void> => {
     try {
+      // 先查找文件节点，获取文件路径
+      const fileNode = findNodeById(fileId)
+      if (!fileNode || fileNode.type !== 'file') {
+        throw new Error('文件不存在')
+      }
+      
+      // 如果当前工作区有本地文件夹句柄，先删除本地文件系统中的真实文件
+      if (currentWorkspace.value && fileNode.path) {
+        try {
+          const { getFolderHandle, deleteFile: deleteLocalFile } = await import('@/utils/localFileSystem')
+          const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+          
+          if (folderHandle) {
+            // 删除本地文件系统中的真实文件
+            await deleteLocalFile(folderHandle, fileNode.path)
+            console.log('本地文件系统文件删除成功:', fileNode.path)
+          }
+        } catch (err) {
+          console.warn('删除本地文件系统文件失败，继续删除节点:', err)
+          // 继续删除节点，即使本地文件系统删除失败
+        }
+      }
+      
+      // 从文件树中移除节点
       const removeFromNodes = (nodes: FileTreeNode[]): boolean => {
         for (let i = 0; i < nodes.length; i++) {
           if (nodes[i].id === fileId) {
@@ -881,6 +954,10 @@ export const useAppStore = defineStore('app', () => {
         // 如果删除的是当前选中的文件，清除选中状态
         if (selectedFileId.value === fileId) {
           selectedFileId.value = null
+        }
+        // 如果删除的是当前编辑的文档，清除当前文档
+        if (currentDocument.value?.id === fileId) {
+          currentDocument.value = null
         }
         console.log('文件删除成功:', fileId)
       } else {
@@ -900,6 +977,30 @@ export const useAppStore = defineStore('app', () => {
    */
   const deleteFolder = async (folderId: string): Promise<void> => {
     try {
+      // 先查找文件夹节点，获取文件夹路径
+      const folderNode = findNodeById(folderId)
+      if (!folderNode || folderNode.type !== 'folder') {
+        throw new Error('文件夹不存在')
+      }
+      
+      // 如果当前工作区有本地文件夹句柄，先删除本地文件系统中的真实文件夹
+      if (currentWorkspace.value && folderNode.path) {
+        try {
+          const { getFolderHandle, deleteFolder: deleteLocalFolder } = await import('@/utils/localFileSystem')
+          const folderHandle = await getFolderHandle(currentWorkspace.value.id)
+          
+          if (folderHandle) {
+            // 删除本地文件系统中的真实文件夹（递归删除所有内容）
+            await deleteLocalFolder(folderHandle, folderNode.path)
+            console.log('本地文件系统文件夹删除成功:', folderNode.path)
+          }
+        } catch (err) {
+          console.warn('删除本地文件系统文件夹失败，继续删除节点:', err)
+          // 继续删除节点，即使本地文件系统删除失败
+        }
+      }
+      
+      // 从文件树中移除节点
       const removeFromNodes = (nodes: FileTreeNode[]): boolean => {
         for (let i = 0; i < nodes.length; i++) {
           if (nodes[i].id === folderId) {
@@ -1088,22 +1189,17 @@ export const useAppStore = defineStore('app', () => {
       const { selectLocalFolder, saveFolderHandle, readFolderStructure, getFolderName } = await import('@/utils/localFileSystem')
       
       // 选择本地文件夹
-      let folderHandle: FileSystemDirectoryHandle
-      try {
-        folderHandle = await selectLocalFolder()
-      } catch (err: any) {
-        // 如果是用户取消，直接抛出，让上层处理
-        if (err.isUserCancel || err.message === '用户取消了文件夹选择') {
-          throw err
-        }
-        // 其他错误也抛出
-        throw err
-      }
+      console.log('开始选择本地文件夹...')
+      const folderHandle = await selectLocalFolder()
+      console.log('文件夹选择成功，句柄:', folderHandle)
       
       const folderName = getFolderName(folderHandle)
+      console.log('文件夹名称:', folderName)
       
       // 读取文件夹结构
+      console.log('开始读取文件夹结构...')
       const folderStructure = await readFolderStructure(folderHandle)
+      console.log('文件夹结构读取成功，节点数:', folderStructure.length)
       
       // 创建工作区
       const now = new Date()
@@ -1119,7 +1215,9 @@ export const useAppStore = defineStore('app', () => {
       }
       
       // 保存文件夹句柄
+      console.log('开始保存文件夹句柄...')
       await saveFolderHandle(newWorkspace.id, folderHandle)
+      console.log('文件夹句柄保存成功')
       
       workspaces.value.push(newWorkspace)
       await saveWorkspaces()
@@ -1127,8 +1225,17 @@ export const useAppStore = defineStore('app', () => {
       console.log('从本地文件夹创建工作区成功:', newWorkspace)
       return newWorkspace
     } catch (err: any) {
-      // 如果是用户取消，直接抛出，不设置 error.value
-      if (err.isUserCancel || err.message === '用户取消了文件夹选择') {
+      console.log('createWorkspaceFromLocalFolder 捕获到错误:', {
+        name: err.name,
+        message: err.message,
+        isUserCancel: err.isUserCancel,
+        stack: err.stack,
+        err: err
+      })
+      
+      // 只有明确标记为 isUserCancel 的错误才认为是取消操作
+      if (err.isUserCancel === true) {
+        console.log('确认为用户取消操作，直接抛出')
         throw err
       }
       
@@ -1366,6 +1473,7 @@ export const useAppStore = defineStore('app', () => {
     createNewDocument,
     loadDocument,
     updateCurrentDocument,
+    saveCurrentDocument,
     markDocumentAsSaved,
     clearError,
     

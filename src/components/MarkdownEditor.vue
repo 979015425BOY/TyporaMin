@@ -215,6 +215,7 @@
           ref="previewRef"
           class="h-full overflow-auto p-6"
           @scroll="onPreviewScroll"
+          @click="handlePreviewClick"
         >
           <div 
             class="markdown-preview prose prose-gray dark:prose-invert max-w-none"
@@ -259,6 +260,7 @@ import { indentWithTab } from '@codemirror/commands'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { useAppStore } from '../stores/app'
+import type { FileTreeNode } from '@/types'
 import { 
   List, 
   ChatDotRound, 
@@ -319,6 +321,76 @@ const editMode = ref<EditMode>('visual')
 const appStore = useAppStore()
 const settings = computed(() => appStore.settings)
 const isDarkMode = computed(() => appStore.isDarkMode)
+const currentDocument = computed(() => appStore.currentDocument)
+
+/**
+ * 根据路径在文件树中查找节点
+ */
+const findFileNodeByPath = (targetPath: string): FileTreeNode | null => {
+  const normalize = (p: string) => p.replace(/^[.\/]+/, '')
+  const normalizedTarget = normalize(targetPath)
+
+  const search = (nodes: FileTreeNode[]): FileTreeNode | null => {
+    for (const node of nodes) {
+      if (node.type === 'file' && normalize(node.path || '') === normalizedTarget) {
+        return node
+      }
+      if (node.children) {
+        const found = search(node.children as FileTreeNode[])
+        if (found) return found
+      }
+    }
+    return null
+  }
+
+  return search(appStore.fileTreeData as FileTreeNode[])
+}
+
+/**
+ * 根据当前文档和链接 href 解析出可能的文件路径，并尝试在应用中打开
+ */
+const openFileByHref = async (href: string): Promise<boolean> => {
+  // 仅处理 markdown / 文本类链接
+  if (!href.endsWith('.md') && !href.endsWith('.markdown') && !href.endsWith('.txt')) {
+    return false
+  }
+
+  const hrefClean = decodeURIComponent(href)
+
+  const currentPath = currentDocument.value?.filePath || ''
+  const baseDir = currentPath.includes('/') ? currentPath.slice(0, currentPath.lastIndexOf('/')) : ''
+
+  const candidates: string[] = []
+
+  // 绝对路径（相对工作区根目录）
+  if (hrefClean.startsWith('/')) {
+    candidates.push(hrefClean.slice(1))
+  } else {
+    // 相对当前文件所在目录
+    if (baseDir) {
+      candidates.push(`${baseDir}/${hrefClean}`)
+    }
+    // 直接按链接本身作为相对路径
+    candidates.push(hrefClean)
+  }
+
+  for (const p of candidates) {
+    const node = findFileNodeByPath(p)
+    if (node) {
+      try {
+        // 同步文件树选中状态
+        appStore.selectFile(node.id)
+        // 加载文档内容
+        await appStore.loadDocument(node.id)
+        return true
+      } catch (e) {
+        console.warn('通过链接打开文档失败:', e)
+      }
+    }
+  }
+
+  return false
+}
 
 // 编辑器状态
 const cursorPosition = ref({ line: 1, column: 1 })
@@ -348,6 +420,16 @@ marked.use({
       }
       const highlighted = hljs.highlightAuto(code).value
       return `<pre><code class="hljs">${highlighted}</code></pre>`
+    },
+    link(href: string, title: string | null, text: string) {
+      // 确保链接可以点击跳转
+      const titleAttr = title ? ` title="${title}"` : ''
+      // 外部链接在新窗口打开
+      if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('//')) {
+        return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer" class="markdown-link">${text}</a>`
+      }
+      // 其他链接（锚点、相对路径等）也允许跳转
+      return `<a href="${href}"${titleAttr} class="markdown-link">${text}</a>`
     }
   },
   breaks: true,
@@ -685,8 +767,8 @@ const initVisualEditor = async () => {
     // 处理行内代码
     html = html.replace(/`(.*?)`/g, '<code>$1</code>')
     
-    // 处理链接
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    // 处理链接 - 确保链接可点击跳转
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="markdown-link">$1</a>')
     
     // 处理换行
     html = html.replace(/\n/g, '<br>')
@@ -767,6 +849,35 @@ const initVisualEditor = async () => {
   editableDiv.addEventListener('paste', () => {
     // 处理粘贴事件，延迟处理以确保内容已更新
     setTimeout(handleInput, 10)
+  })
+  
+  // 处理可视化编辑器中的链接点击
+  editableDiv.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement
+    const link = target.closest('a')
+    
+    if (link) {
+      const href = link.getAttribute('href')
+      if (href) {
+        // 锚点链接，直接交给浏览器滚动
+        if (href.startsWith('#')) {
+          return
+        }
+        
+        // 外部链接，新窗口打开
+        if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('//')) {
+          e.preventDefault()
+          window.open(href, '_blank', 'noopener,noreferrer')
+          return
+        }
+        
+        // 尝试在应用内根据路径打开对应文件
+        const opened = await openFileByHref(href)
+        if (opened) {
+          e.preventDefault()
+        }
+      }
+    }
   })
   
   // 添加键盘事件监听器
@@ -1069,6 +1180,40 @@ const onPreviewScroll = () => {
   // 由于实现复杂度较高，暂时保留接口
 }
 
+/**
+ * 处理预览区域的点击事件：
+ * - 外部链接：浏览器新标签打开
+ * - 锚点链接：保持默认行为
+ * - 相对/绝对 md 链接：在应用内打开对应文件
+ */
+const handlePreviewClick = async (event: MouseEvent) => {
+  const target = event.target as HTMLElement
+  const link = target.closest('a')
+  
+  if (link) {
+    const href = link.getAttribute('href')
+    if (href) {
+      // 锚点链接，交给浏览器处理滚动
+      if (href.startsWith('#')) {
+        return
+      }
+      
+      // 外部链接，新窗口打开
+      if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('//')) {
+        event.preventDefault()
+        window.open(href, '_blank', 'noopener,noreferrer')
+        return
+      }
+      
+      // 尝试在应用内根据路径打开对应文件
+      const opened = await openFileByHref(href)
+      if (opened) {
+        event.preventDefault()
+      }
+    }
+  }
+}
+
 // 监听主题变化
 watch(isDarkMode, async () => {
   // 重新初始化编辑器以应用新主题
@@ -1357,16 +1502,35 @@ defineExpose({
   background-color: #1f2937;
 }
 
-:deep(.markdown-preview a) {
+:deep(.markdown-preview a),
+:deep(.markdown-link) {
   color: #2563eb;
   text-decoration: none;
+  cursor: pointer;
 }
 
-:deep(.markdown-preview a:hover) {
+:deep(.markdown-preview a:hover),
+:deep(.markdown-link:hover) {
   text-decoration: underline;
 }
 
-.dark :deep(.markdown-preview a) {
+.dark :deep(.markdown-preview a),
+.dark :deep(.markdown-link) {
+  color: #60a5fa;
+}
+
+/* 可视化编辑器中的链接样式 */
+:deep(.visual-editor-content a) {
+  color: #2563eb;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+:deep(.visual-editor-content a:hover) {
+  text-decoration: underline;
+}
+
+.dark :deep(.visual-editor-content a) {
   color: #60a5fa;
 }
 

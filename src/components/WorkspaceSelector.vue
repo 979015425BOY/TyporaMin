@@ -413,18 +413,32 @@ const handleCreateFromLocalFolder = async () => {
     }
     
     const workspace = await appStore.createWorkspaceFromLocalFolder()
-    
     // 自动切换到新创建的工作区
     await appStore.switchWorkspace(workspace.id)
     
     ElMessage.success(`工作区"${workspace.name}"创建成功`)
   } catch (error: any) {
     // 检查是否是用户取消操作
-    const isUserCancel = error.isUserCancel || error.message === '用户取消了文件夹选择'
+    // 只有明确标记为 isUserCancel 的错误才认为是取消操作
+    const isUserCancel = error.isUserCancel === true
+
     
     if (isUserCancel) {
       // 用户取消，不显示错误，静默处理
-      console.log('用户取消了文件夹选择')
+      
+      // 检查原始错误，看是否有更多信息
+      if (error.originalError) {
+        console.warn('原始错误信息:', error.originalError)
+      }
+      
+      // 注意：如果用户确定点击了选择但看到此消息，可能是浏览器权限问题
+      // 请检查浏览器是否阻止了文件夹访问权限
+      // 建议：刷新页面后重试，或检查浏览器地址栏的权限设置
+      console.warn('提示：如果确定点击了选择，请检查：')
+      console.warn('1. 浏览器地址栏左侧的权限设置')
+      console.warn('2. 是否在 HTTPS 或 localhost 环境下运行')
+      console.warn('3. 浏览器是否阻止了文件访问权限')
+      
       return
     }
     

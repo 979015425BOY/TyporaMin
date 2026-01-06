@@ -360,25 +360,27 @@ const scheduleAutoSave = () => {
 /**
  * 保存文档
  */
-const saveDocument = () => {
+const saveDocument = async () => {
   if (!currentDocument.value) return
   
-  // 更新文档内容
-  appStore.updateCurrentDocument({
-    content: documentContent.value,
-    title: extractTitle(documentContent.value) || currentDocument.value.title
-  })
-  
-  // 标记为已保存
-  appStore.markDocumentAsSaved()
-  
-  // 保存到本地存储
-  saveToLocalStorage()
-  
-  // 保存后清除编辑状态
-  clearCurrentEditingState()
-  
-  ElMessage.success('文档已保存')
+  try {
+    // 更新文档内容
+    appStore.updateCurrentDocument({
+      content: documentContent.value,
+      title: extractTitle(documentContent.value) || currentDocument.value.title
+    })
+    
+    // 保存到原文件（如果是从本地文件系统加载的，会直接保存到原文件）
+    await appStore.saveCurrentDocument()
+    
+    // 保存后清除编辑状态
+    clearCurrentEditingState()
+    
+    ElMessage.success('文档已保存')
+  } catch (error) {
+    console.error('保存文档失败:', error)
+    ElMessage.error('保存文档失败: ' + (error as Error).message)
+  }
 }
 
 /**
@@ -459,11 +461,9 @@ const clearCurrentEditingState = () => {
  * 
  * @param content 文档内容
  */
-const handleSave = (content: string) => {
+const handleSave = async (content: string) => {
   documentContent.value = content
-  saveDocument()
-  // 保存后清除编辑状态，因为文档已经保存
-  clearCurrentEditingState()
+  await saveDocument()
 }
 
 /**
