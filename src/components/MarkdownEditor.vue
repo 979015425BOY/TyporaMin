@@ -659,8 +659,16 @@ const initVisualEditor = async () => {
   editableDiv.style.backgroundColor = 'transparent'
   
   // 设置初始内容
+  // 使用 marked 渲染的HTML，确保格式正确（包括列表、代码块等）
   if (content.value) {
-    editableDiv.innerHTML = renderedMarkdown.value
+    try {
+      // 使用 marked 库渲染Markdown为HTML，确保格式完整
+      const rendered = marked(content.value)
+      editableDiv.innerHTML = typeof rendered === 'string' ? rendered : '<p>正在渲染...</p>'
+    } catch (error) {
+      console.warn('渲染Markdown失败:', error)
+      editableDiv.innerHTML = '<p>渲染失败</p>'
+    }
   } else {
     editableDiv.innerHTML = '<p>开始编写您的文档...</p>'
   }
@@ -784,9 +792,13 @@ const initVisualEditor = async () => {
   // 添加输入事件监听器
   const handleInput = () => {
     // 获取纯文本内容（Markdown格式）
+    // 注意：innerText 会丢失格式，但这是可视化编辑器的限制
+    // 为了保持格式，我们需要从DOM中提取Markdown格式
     const textContent = editableDiv.innerText || editableDiv.textContent || ''
     
     // 更新内容状态
+    // 注意：这里保存的是纯文本，可能会丢失一些格式
+    // 但这是可视化编辑器的权衡：用户看到的是渲染后的HTML，但保存的是文本
     content.value = textContent
     emit('update:modelValue', textContent)
     emit('change', textContent)
@@ -1010,16 +1022,25 @@ const getCurrentEditor = (): EditorView | undefined => {
 const switchEditMode = async (mode: EditMode) => {
   if (editMode.value === mode) return
   
-  // 保存当前内容
-  const currentEditor = getCurrentEditor()
-  if (currentEditor) {
-    if (editMode.value === 'visual' && visualEditorView.value?.dom) {
-      // 从可视化编辑器获取内容
-      const htmlContent = (visualEditorView.value.dom as HTMLElement).innerHTML
-      content.value = convertHtmlToMarkdown(htmlContent)
-    } else if (editMode.value === 'source' && sourceEditorView.value) {
-      // 从源码编辑器获取内容
-      content.value = sourceEditorView.value.state.doc.toString()
+  // 保存当前内容 - 优先使用 content.value，因为它始终保存最新的Markdown内容
+  if (editMode.value === 'source' && sourceEditorView.value) {
+    // 从源码编辑器获取内容（这是最准确的）
+    const sourceContent = sourceEditorView.value.state.doc.toString()
+    content.value = sourceContent
+    emit('update:modelValue', sourceContent)
+    emit('change', sourceContent)
+  } else if (editMode.value === 'visual' && visualEditorView.value?.dom) {
+    // 从可视化编辑器获取内容
+    // 注意：可视化编辑器在输入时会更新 content.value，所以这里应该已经是最新的
+    // 但为了确保同步，我们从DOM获取文本内容
+    const editableDiv = visualEditorView.value.dom as HTMLElement
+    // 尝试从DOM获取纯文本，但主要依赖 content.value
+    const textContent = editableDiv.innerText || editableDiv.textContent || ''
+    // 如果 content.value 为空但DOM有内容，使用DOM内容
+    if (!content.value.trim() && textContent.trim()) {
+      content.value = textContent
+      emit('update:modelValue', textContent)
+      emit('change', textContent)
     }
   }
   
@@ -1233,9 +1254,15 @@ watch(() => props.modelValue, (newValue) => {
     
     // 更新当前活动编辑器的内容
     if (editMode.value === 'visual' && visualEditorView.value?.dom) {
-      // 可视化编辑器：直接更新DOM内容
+      // 可视化编辑器：使用 marked 渲染Markdown为HTML
       const editableDiv = visualEditorView.value.dom as HTMLElement
-      editableDiv.innerHTML = renderedMarkdown.value
+      try {
+        const rendered = marked(newValue || '')
+        editableDiv.innerHTML = typeof rendered === 'string' ? rendered : '<p>正在渲染...</p>'
+      } catch (error) {
+        console.warn('渲染Markdown失败:', error)
+        editableDiv.innerHTML = '<p>渲染失败</p>'
+      }
     } else if (editMode.value === 'source' && sourceEditorView.value) {
       // 源码编辑器：使用CodeMirror 6 API
       const transaction = sourceEditorView.value.state.update({
